@@ -1,0 +1,12 @@
+.bloop
+.ensime
+.idea
+.metals
+target
+.vscode
+
+project/.bloop
+project/.ensime
+project/.idea
+project/.metals
+project/target
