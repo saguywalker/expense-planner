@@ -1,12 +1,15 @@
 .bloop
+.bsp
 .ensime
 .idea
 .metals
-target
+.pnp.cjs
+.pnp.loader.mjs
 .vscode
-
+.yarn
 project/.bloop
 project/.ensime
 project/.idea
 project/.metals
 project/target
+target
