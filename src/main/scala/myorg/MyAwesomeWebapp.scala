@@ -11,7 +11,7 @@ import scala.scalajs.js.annotation.*
 @JSExportTopLevel("TyrianApp")
 object MyAwesomeWebapp extends TyrianIOApp[Msg, Model] {
 
-  private val userId: String = "anonymous"
+  private val userId: String = "me"
 
   override def router: Location => Msg =
     Routing.none(Msg.NoOp)
@@ -23,30 +23,36 @@ object MyAwesomeWebapp extends TyrianIOApp[Msg, Model] {
     println(s"receiving message: $msg")
     msg match {
       case Msg.AddExpense =>
+        val updatedExpenses = Expense(
+          id = model.runningId.toString,
+          description = model.description,
+          totalAmount = model.amount.toDouble,
+          paidBy = model.paidBy,
+          myShare = model.splitType match {
+            case SplitType.Even      => (model.amount / 2).toDouble
+            case c: SplitType.Custom => c.myShare.toDouble
+          },
+          wifeShare = model.splitType match {
+            case SplitType.Even      => (model.amount / 2).toDouble
+            case c: SplitType.Custom => c.wifeShare.toDouble
+          }
+        ) :: model.expenses
+
         val updatedModel = model.copy(
+          splitType = SplitType.Even,
+          description = "",
+          amount = 0,
           runningId = model.runningId + 1,
-          expenses = Expense(
-            id = model.runningId.toString,
-            description = model.description,
-            totalAmount = model.amount.toDouble,
-            paidBy = model.paidBy,
-            myShare = model.splitType match {
-              case SplitType.Even      => (model.amount / 2).toDouble
-              case c: SplitType.Custom => c.myShare.toDouble
-            },
-            wifeShare = model.splitType match {
-              case SplitType.Even      => (model.amount / 2).toDouble
-              case c: SplitType.Custom => c.wifeShare.toDouble
-            }
-          ) :: model.expenses
+          expenses = updatedExpenses
         )
         println(s"updated model: $updatedModel")
         (
           updatedModel,
           Cmd.None
         )
-      case Msg.AmountChanged(amount)    => (model.copy(amount = amount), Cmd.None)
-      case Msg.DeleteExpense(_)         => (model, Cmd.None) // TODO
+      case Msg.AmountChanged(amount) => (model.copy(amount = amount), Cmd.None)
+      case Msg.DeleteExpense(id) =>
+        (model.copy(expenses = model.expenses.filterNot(_.id == id)), Cmd.None)
       case Msg.DescriptionChanged(desc) => (model.copy(description = desc), Cmd.None)
       case Msg.HideMessageBox           => (model, Cmd.None) // TODO
       case Msg.MyShareChanged(amount) =>
@@ -411,12 +417,17 @@ object MyAwesomeWebapp extends TyrianIOApp[Msg, Model] {
       paidBy: String = "me",
       splitType: SplitType = SplitType.Even,
       expenses: List[Expense] = Nil,
-      balance: BigDecimal = BigDecimal(0),
       showModal: Boolean = false,
       modalTitle: String = "",
       modalMessage: String = "",
       runningId: Long = 1
-  )
+  ) {
+    val balance: BigDecimal =
+      expenses.foldLeft(BigDecimal(0)) { case (amount, expense) =>
+        amount + (if expense.paidBy == userId then -expense.wifeShare
+                  else expense.myShare)
+      }
+  }
 }
 
 sealed trait DomainService {
