@@ -60,8 +60,6 @@ object MyAwesomeWebapp extends TyrianIOApp[Msg, Model] {
           expenses = expenses
         )
 
-        println(s"updated model: $updatedModelE")
-
         updatedModelE match {
           case Right(updatedModel) => (updatedModel, Cmd.None)
           case Left(error) =>
@@ -391,8 +389,4 @@ object MyAwesomeWebapp extends TyrianIOApp[Msg, Model] {
       override val message: String = "Please enter a description."
     }
 
-}
-
-sealed trait DomainService {
-  def addExpense(msg: Msg): IO[Any]
 }
