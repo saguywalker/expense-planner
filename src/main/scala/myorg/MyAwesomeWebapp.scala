@@ -23,36 +23,57 @@ object MyAwesomeWebapp extends TyrianIOApp[Msg, Model] {
     println(s"receiving message: $msg")
     msg match {
       case Msg.AddExpense =>
-        val (myShare, wifeShare) = model.splitType match {
-          case SplitType.Even      => (model.amount / 2, model.amount / 2)
-          case c: SplitType.Custom => (c.myShare, c.wifeShare)
-        }
-        val updatedExpenses = Expense(
-          id = model.runningId.toString,
-          description = model.description,
-          totalAmount = model.amount.toDouble,
-          paidBy = model.paidBy,
-          myShare = myShare.toDouble,
-          wifeShare = wifeShare.toDouble
-        ) :: model.expenses
 
-        val updatedModel = model.copy(
+        val amountE =
+          if model.amount <= 0 then Left(Error.InvalidAmount)
+          else Right(model.amount)
+
+        val sharesE = model.splitType match {
+          case SplitType.Even => Right((model.amount / 2, model.amount / 2))
+          case c: SplitType.Custom if model.amount == c.myShare + c.wifeShare =>
+            Right((c.myShare, c.wifeShare))
+          case c: SplitType.Custom =>
+            Left(Error.InvalidSplit)
+        }
+
+        val descriptionE =
+          if model.description.trim.isEmpty then Left(Error.InvalidDescription)
+          else Right(model.description)
+
+        val updatedModelE = for {
+          amount               <- amountE
+          (myShare, wifeShare) <- sharesE
+          description          <- descriptionE
+          expenses = Expense(
+            id = model.runningId.toString,
+            description = model.description,
+            totalAmount = model.amount.toDouble,
+            paidBy = model.paidBy,
+            myShare = myShare.toDouble,
+            wifeShare = wifeShare.toDouble
+          ) :: model.expenses
+        } yield model.copy(
           splitType = SplitType.Even,
           description = "",
           amount = 0,
           runningId = model.runningId + 1,
-          expenses = updatedExpenses
+          expenses = expenses
         )
-        println(s"updated model: $updatedModel")
-        (
-          updatedModel,
-          Cmd.None
-        )
+
+        println(s"updated model: $updatedModelE")
+
+        updatedModelE match {
+          case Right(updatedModel) => (updatedModel, Cmd.None)
+          case Left(error) =>
+            (model, Cmd.Emit(Msg.ShowMessageBox(title = error.title, message = error.message)))
+        }
+
       case Msg.AmountChanged(amount) => (model.copy(amount = amount), Cmd.None)
       case Msg.DeleteExpense(id) =>
         (model.copy(expenses = model.expenses.filterNot(_.id == id)), Cmd.None)
       case Msg.DescriptionChanged(desc) => (model.copy(description = desc), Cmd.None)
-      case Msg.HideMessageBox           => (model, Cmd.None) // TODO
+      case Msg.HideMessageBox =>
+        (model.copy(showModal = false, modalTitle = "", modalMessage = ""), Cmd.None)
       case Msg.MyShareChanged(amount) =>
         (
           model.splitType match {
@@ -65,7 +86,8 @@ object MyAwesomeWebapp extends TyrianIOApp[Msg, Model] {
       case Msg.NoOp                  => (model, Cmd.None)
       case Msg.PaidByChanged(paidBy) => (model.copy(paidBy = paidBy), Cmd.None)
       case Msg.SetUserId(_)          => (model, Cmd.None) // TODO
-      case Msg.ShowMessageBox(_, _)  => (model, Cmd.None) // TODO
+      case Msg.ShowMessageBox(title, message) =>
+        (model.copy(showModal = true, modalTitle = title, modalMessage = message), Cmd.None)
       case Msg.SplitTypeChanged(splitType) =>
         (model.copy(splitType = SplitType.from(splitType, model.amount)), Cmd.None)
       case Msg.WifeShareChanged(amount) =>
@@ -430,6 +452,25 @@ object MyAwesomeWebapp extends TyrianIOApp[Msg, Model] {
                   else expense.myShare)
       }
   }
+
+  sealed trait Error {
+    val title: String
+    val message: String
+  }
+  object Error:
+    case object InvalidAmount extends Error {
+      override val title: String   = "Invalid Amount"
+      override val message: String = "Please enter a valid amount."
+    }
+    case object InvalidSplit extends Error {
+      override val title: String   = "Invalid Split"
+      override val message: String = "Shares must add up to the total amount."
+    }
+    case object InvalidDescription extends Error {
+      override val title: String   = "Invalid Description"
+      override val message: String = "Please enter a description."
+    }
+
 }
 
 sealed trait DomainService {
