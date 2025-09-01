@@ -23,19 +23,17 @@ object MyAwesomeWebapp extends TyrianIOApp[Msg, Model] {
     println(s"receiving message: $msg")
     msg match {
       case Msg.AddExpense =>
+        val (myShare, wifeShare) = model.splitType match {
+          case SplitType.Even      => (model.amount / 2, model.amount / 2)
+          case c: SplitType.Custom => (c.myShare, c.wifeShare)
+        }
         val updatedExpenses = Expense(
           id = model.runningId.toString,
           description = model.description,
           totalAmount = model.amount.toDouble,
           paidBy = model.paidBy,
-          myShare = model.splitType match {
-            case SplitType.Even      => (model.amount / 2).toDouble
-            case c: SplitType.Custom => c.myShare.toDouble
-          },
-          wifeShare = model.splitType match {
-            case SplitType.Even      => (model.amount / 2).toDouble
-            case c: SplitType.Custom => c.wifeShare.toDouble
-          }
+          myShare = myShare.toDouble,
+          wifeShare = wifeShare.toDouble
         ) :: model.expenses
 
         val updatedModel = model.copy(
@@ -377,8 +375,12 @@ object MyAwesomeWebapp extends TyrianIOApp[Msg, Model] {
 
   sealed trait SplitType
   object SplitType:
-    case object Even                                              extends SplitType
-    case class Custom(myShare: BigDecimal, wifeShare: BigDecimal) extends SplitType
+    case object Even extends SplitType {
+      override def toString: String = "even"
+    }
+    case class Custom(myShare: BigDecimal, wifeShare: BigDecimal) extends SplitType {
+      override def toString: String = "custom"
+    }
 
     def from(splitType: String, amount: BigDecimal): SplitType =
       splitType match {
