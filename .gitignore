@@ -13,3 +13,5 @@ project/.idea
 project/.metals
 project/target
 target
+.parcel-cache
+dist
