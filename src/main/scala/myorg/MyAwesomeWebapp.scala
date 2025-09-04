@@ -1,6 +1,6 @@
 package myorg
 
-import cats.effect.IO
+import cats.effect.{IO, Ref}
 import myorg.MyAwesomeWebapp.{Model, Msg}
 import tyrian.Html.*
 import tyrian.*
@@ -17,7 +17,7 @@ object MyAwesomeWebapp extends TyrianIOApp[Msg, Model] {
     Routing.none(Msg.NoOp)
 
   override def init(flags: Map[String, String]): (Model, Cmd[IO, Msg]) =
-    (Model(), Cmd.None)
+    (Model(), Cmd.Run(ExpenseService.inMemory.flatMap(_.fetchExpenses(userId)), Msg.NewData.apply))
 
   override def update(model: Model): Msg => (Model, Cmd[IO, Msg]) = msg => {
     println(s"receiving message: $msg")
@@ -390,3 +390,31 @@ object MyAwesomeWebapp extends TyrianIOApp[Msg, Model] {
     }
 
 }
+
+trait ExpenseService:
+  def fetchExpenses(userId: String): IO[List[MyAwesomeWebapp.Expense]]
+  def addExpense(userId: String, expense: MyAwesomeWebapp.Expense): IO[Unit]
+  def deleteExpense(userId: String, expenseId: String): IO[Unit]
+
+object ExpenseService:
+  def inMemory: IO[ExpenseService] =
+    Ref.of[IO, Map[String, List[MyAwesomeWebapp.Expense]]](Map.empty).map { ref =>
+      InMemoryExpenseService(ref)
+    }
+
+class InMemoryExpenseService(ref: Ref[IO, Map[String, List[MyAwesomeWebapp.Expense]]])
+    extends ExpenseService:
+  override def fetchExpenses(userId: String): IO[List[MyAwesomeWebapp.Expense]] =
+    ref.get.map(_.getOrElse(userId, Nil))
+
+  override def addExpense(userId: String, expense: MyAwesomeWebapp.Expense): IO[Unit] =
+    ref.update { data =>
+      val userExpenses = data.getOrElse(userId, Nil)
+      data.updated(userId, expense :: userExpenses)
+    }
+
+  override def deleteExpense(userId: String, expenseId: String): IO[Unit] =
+    ref.update { data =>
+      val userExpenses = data.getOrElse(userId, Nil).filterNot(_.id == expenseId)
+      data.updated(userId, userExpenses)
+    }
