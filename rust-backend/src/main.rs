@@ -1,13 +1,50 @@
 use axum::{
     extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
-use rusqlite::{Connection, Result};
+use rusqlite::{Connection, Result as RusqliteResult};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tower_http::cors::CorsLayer;
+
+#[derive(Debug)]
+pub enum AppError {
+    Database(rusqlite::Error),
+    Io(std::io::Error),
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, error_message) = match self {
+            AppError::Database(db_err) => {
+                eprintln!("Database error: {:?}", db_err);
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
+            }
+            AppError::Io(io_err) => {
+                eprintln!("IO error: {:?}", io_err);
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
+            }
+        };
+
+        (status, Json(serde_json::json!({"error": error_message}))).into_response()
+    }
+}
+
+impl From<rusqlite::Error> for AppError {
+    fn from(err: rusqlite::Error) -> Self {
+        AppError::Database(err)
+    }
+}
+
+impl From<std::io::Error> for AppError {
+    fn from(err: std::io::Error) -> Self {
+        AppError::Io(err)
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Expense {
@@ -24,11 +61,9 @@ struct AppState {
 }
 
 #[tokio::main]
-async fn main() {
-    // Initialize database
-    let conn = Connection::open("expenses.db").expect("Failed to open database");
+async fn main() -> Result<(), AppError> {
+    let conn = Connection::open("expenses.db")?;
 
-    // Create expenses table
     conn.execute(
         "CREATE TABLE IF NOT EXISTS expenses (
             id INTEGER PRIMARY KEY,
@@ -39,8 +74,7 @@ async fn main() {
             custom_splits TEXT
         )",
         [],
-    )
-    .expect("Failed to create table");
+    )?;
 
     let shared_state = Arc::new(AppState {
         db: Mutex::new(conn),
@@ -58,13 +92,15 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
     axum::serve(listener, app).await.unwrap();
+
+    Ok(())
 }
 
-async fn get_expenses(State(state): State<Arc<AppState>>) -> Json<Vec<Expense>> {
+async fn get_expenses(State(state): State<Arc<AppState>>) -> Result<Json<Vec<Expense>>, AppError> {
     let conn = state.db.lock().await;
-    let mut stmt = conn
-        .prepare("SELECT id, description, amount, paid_by, split_type, custom_splits FROM expenses")
-        .expect("Failed to prepare statement");
+    let mut stmt = conn.prepare(
+        "SELECT id, description, amount, paid_by, split_type, custom_splits FROM expenses",
+    )?;
 
     let expenses = stmt
         .query_map([], |row| {
@@ -76,18 +112,16 @@ async fn get_expenses(State(state): State<Arc<AppState>>) -> Json<Vec<Expense>> 
                 split_type: row.get(4)?,
                 custom_splits: row.get(5)?,
             })
-        })
-        .expect("Failed to execute query")
-        .filter_map(Result::ok)
-        .collect::<Vec<_>>();
+        })?
+        .collect::<RusqliteResult<Vec<Expense>>>()?;
 
-    Json(expenses)
+    Ok(Json(expenses))
 }
 
 async fn add_expense(
     State(state): State<Arc<AppState>>,
     Json(expense): Json<Expense>,
-) -> Json<Expense> {
+) -> Result<Json<Expense>, AppError> {
     let conn = state.db.lock().await;
 
     conn.execute(
@@ -100,13 +134,12 @@ async fn add_expense(
             &expense.split_type,
             expense.custom_splits.as_deref(),
         ),
-    )
-    .expect("Failed to insert expense");
+    )?;
 
     let id = conn.last_insert_rowid();
 
-    Json(Expense {
+    Ok(Json(Expense {
         id: Some(id),
         ..expense
-    })
+    }))
 }
