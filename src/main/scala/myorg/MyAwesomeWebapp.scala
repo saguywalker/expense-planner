@@ -16,14 +16,20 @@ object MyAwesomeWebapp extends TyrianIOApp[Msg, Model] {
   override def router: Location => Msg =
     Routing.none(Msg.NoOp)
 
-  override def init(flags: Map[String, String]): (Model, Cmd[IO, Msg]) =
-    (Model(), Cmd.Run(ExpenseService.inMemory.flatMap(_.fetchExpenses(userId)), Msg.NewData.apply))
+  override def init(flags: Map[String, String]): (Model, Cmd[IO, Msg]) = {
+    val initialCmd = Cmd.Run(
+      ExpenseService.inMemory.flatMap(service =>
+        service.fetchExpenses(userId).map(expenses => Msg.Initialized(service, expenses))
+      ),
+      identity
+    )
+    (Model(), initialCmd)
+  }
 
   override def update(model: Model): Msg => (Model, Cmd[IO, Msg]) = msg => {
     println(s"receiving message: $msg")
     msg match {
       case Msg.AddExpense =>
-
         val amountE =
           if model.amount <= 0 then Left(Error.InvalidAmount)
           else Right(model.amount)
@@ -32,7 +38,7 @@ object MyAwesomeWebapp extends TyrianIOApp[Msg, Model] {
           case SplitType.Even => Right((model.amount / 2, model.amount / 2))
           case c: SplitType.Custom if model.amount == c.myShare + c.wifeShare =>
             Right((c.myShare, c.wifeShare))
-          case c: SplitType.Custom =>
+          case _: SplitType.Custom =>
             Left(Error.InvalidSplit)
         }
 
@@ -40,38 +46,62 @@ object MyAwesomeWebapp extends TyrianIOApp[Msg, Model] {
           if model.description.trim.isEmpty then Left(Error.InvalidDescription)
           else Right(model.description)
 
-        val updatedModelE = for {
-          amount               <- amountE
+        val newExpenseE = for {
+          _                    <- amountE
           (myShare, wifeShare) <- sharesE
-          description          <- descriptionE
-          expenses = Expense(
-            id = model.runningId.toString,
-            description = model.description,
-            totalAmount = model.amount.toDouble,
-            paidBy = model.paidBy,
-            myShare = myShare.toDouble,
-            wifeShare = wifeShare.toDouble
-          ) :: model.expenses
-        } yield model.copy(
-          splitType = SplitType.Even,
-          description = "",
-          amount = 0,
-          runningId = model.runningId + 1,
-          expenses = expenses
+          _                    <- descriptionE
+        } yield Expense(
+          id = model.runningId.toString, // The service will manage the ID
+          description = model.description,
+          totalAmount = model.amount.toDouble,
+          paidBy = model.paidBy,
+          myShare = myShare.toDouble,
+          wifeShare = wifeShare.toDouble
         )
 
-        updatedModelE match {
-          case Right(updatedModel) => (updatedModel, Cmd.None)
+        newExpenseE match {
+          case Right(newExpense) =>
+            val cmd = model.expenseService.fold(Cmd.None) { service =>
+              Cmd.Run(
+                service.addExpense(userId, newExpense) *> service.fetchExpenses(userId),
+                Msg.NewData.apply
+              )
+            }
+
+            val updatedModel = model.copy(
+              splitType = SplitType.Even,
+              description = "",
+              amount = 0,
+              runningId = model.runningId + 1
+            )
+            (updatedModel, cmd)
+
           case Left(error) =>
             (model, Cmd.Emit(Msg.ShowMessageBox(title = error.title, message = error.message)))
         }
 
       case Msg.AmountChanged(amount) => (model.copy(amount = amount), Cmd.None)
       case Msg.DeleteExpense(id) =>
-        (model.copy(expenses = model.expenses.filterNot(_.id == id)), Cmd.None)
+        val cmd = model.expenseService.fold(Cmd.None) { service =>
+          Cmd.Run(
+            service.deleteExpense(userId, id) *> service.fetchExpenses(userId),
+            Msg.NewData.apply
+          )
+        }
+        (model, cmd)
+
       case Msg.DescriptionChanged(desc) => (model.copy(description = desc), Cmd.None)
       case Msg.HideMessageBox =>
         (model.copy(showModal = false, modalTitle = "", modalMessage = ""), Cmd.None)
+      case Msg.Initialized(service, expenses) =>
+        (
+          model.copy(
+            expenseService = Some(service),
+            expenses = expenses,
+            runningId = expenses.size + 1
+          ),
+          Cmd.None
+        )
       case Msg.MyShareChanged(amount) =>
         (
           model.splitType match {
@@ -96,7 +126,6 @@ object MyAwesomeWebapp extends TyrianIOApp[Msg, Model] {
           },
           Cmd.None
         )
-
     }
   }
 
@@ -330,19 +359,20 @@ object MyAwesomeWebapp extends TyrianIOApp[Msg, Model] {
 
   sealed trait Msg
   object Msg:
-    case class AmountChanged(value: BigDecimal)               extends Msg
-    case class DeleteExpense(id: String)                      extends Msg
-    case class DescriptionChanged(value: String)              extends Msg
-    case class MyShareChanged(value: BigDecimal)              extends Msg
-    case class NewData(expenses: List[Expense])               extends Msg
-    case class PaidByChanged(value: String)                   extends Msg
-    case class SetUserId(id: String)                          extends Msg
-    case class ShowMessageBox(title: String, message: String) extends Msg
-    case class SplitTypeChanged(value: String)                extends Msg
-    case class WifeShareChanged(value: BigDecimal)            extends Msg
-    case object AddExpense                                    extends Msg
-    case object HideMessageBox                                extends Msg
-    case object NoOp                                          extends Msg
+    case class AmountChanged(value: BigDecimal)                              extends Msg
+    case class DeleteExpense(id: String)                                     extends Msg
+    case class DescriptionChanged(value: String)                             extends Msg
+    case class Initialized(service: ExpenseService, expenses: List[Expense]) extends Msg
+    case class MyShareChanged(value: BigDecimal)                             extends Msg
+    case class NewData(expenses: List[Expense])                              extends Msg
+    case class PaidByChanged(value: String)                                  extends Msg
+    case class SetUserId(id: String)                                         extends Msg
+    case class ShowMessageBox(title: String, message: String)                extends Msg
+    case class SplitTypeChanged(value: String)                               extends Msg
+    case class WifeShareChanged(value: BigDecimal)                           extends Msg
+    case object AddExpense                                                   extends Msg
+    case object HideMessageBox                                               extends Msg
+    case object NoOp                                                         extends Msg
 
   case class Expense(
       id: String,
@@ -362,7 +392,8 @@ object MyAwesomeWebapp extends TyrianIOApp[Msg, Model] {
       showModal: Boolean = false,
       modalTitle: String = "",
       modalMessage: String = "",
-      runningId: Long = 1
+      runningId: Long = 1,
+      expenseService: Option[ExpenseService] = None
   ) {
     val balance: BigDecimal =
       expenses.foldLeft(BigDecimal(0)) { case (amount, expense) =>
@@ -398,7 +429,26 @@ trait ExpenseService:
 
 object ExpenseService:
   def inMemory: IO[ExpenseService] =
-    Ref.of[IO, Map[String, List[MyAwesomeWebapp.Expense]]](Map.empty).map { ref =>
+    val initialExpenses = List(
+      MyAwesomeWebapp.Expense(
+        id = "0",
+        description = "Dinner with friends",
+        totalAmount = 8000,
+        paidBy = "me",
+        myShare = 4000,
+        wifeShare = 4000
+      ),
+      MyAwesomeWebapp.Expense(
+        id = "1",
+        description = "Groceries",
+        totalAmount = 5000,
+        paidBy = "wife",
+        myShare = 2500,
+        wifeShare = 2500
+      )
+    )
+    val initialData = Map("me" -> initialExpenses)
+    Ref.of[IO, Map[String, List[MyAwesomeWebapp.Expense]]](initialData).map { ref =>
       InMemoryExpenseService(ref)
     }
 
