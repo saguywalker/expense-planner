@@ -15,3 +15,5 @@ project/target
 target
 .parcel-cache
 dist
+rust-backend/target
+rust-backend/*.db
